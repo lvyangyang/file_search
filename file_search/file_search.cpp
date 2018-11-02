@@ -205,9 +205,9 @@ void recurse_record(const char drive_letter)
 	//创建数据表
 	sqlite3_exec(db, "PRAGMA synchronous = OFF; ", 0, 0, 0);
 	sqlite3_exec(db, "drop table if exists file_info", 0, 0, 0);
-	sqlite3_exec(db, "create table file_info(frn integer,parentfrn integer,attrib integer ,name text)", 0, 0, 0);
+	sqlite3_exec(db, "create  table file_info (frn integer primary key,parentfrn integer,attrib integer ,name text);", 0, 0, &zErrMsg);
 	sqlite3_exec(db, "drop table if exists dir_info", 0, 0, 0);
-	sqlite3_exec(db, "create table dir_info(frn integer,parentfrn integer,attrib integer ,name text)", 0, 0, 0);
+	sqlite3_exec(db, "create  table dir_info (frn integer primary key,parentfrn integer,attrib integer ,name text);", 0, 0, &zErrMsg);
 
 	//将信息收集到内存
 	map<DWORDLONG, file_info> fileinfo_db;
@@ -221,7 +221,7 @@ void recurse_record(const char drive_letter)
 	//插入文件信息
 	sqlite3_exec(db, "begin;", 0, 0, 0);
 	sqlite3_stmt *stmt_file;
-	const char* sql_file = "insert into file_info values(?,?,?,?)";
+	const char* sql_file = "insert into file_info(frn,parentfrn,attrib,name) values(?,?,?,?)";
 	sqlite3_prepare_v2(db, sql_file, strlen(sql_file), &stmt_file, 0);
 	map<DWORDLONG, file_info>::iterator iter;
 	iter = fileinfo_db.begin();
@@ -231,8 +231,10 @@ void recurse_record(const char drive_letter)
 
 		sqlite3_bind_int64(stmt_file, 1, iter->first);
 		sqlite3_bind_int64(stmt_file, 2, iter->second.parent_frn);
-		sqlite3_bind_int64(stmt_file, 4, iter->second.attrib);
-		sqlite3_bind_text(stmt_file, 3, iter->second.filename.data(), -1, SQLITE_STATIC);
+		sqlite3_bind_int64(stmt_file, 3, iter->second.attrib);
+		sqlite3_bind_text(stmt_file, 4, iter->second.filename.data(), -1, SQLITE_STATIC);
+		
+		
 
 		sqlite3_step(stmt_file);
 		iter++;
@@ -243,7 +245,7 @@ void recurse_record(const char drive_letter)
 	//插入目录信息
 	sqlite3_exec(db, "begin;", 0, 0, 0);
 	sqlite3_stmt *stmt_dir;
-	const char* sql_dir = "insert into dir_info values(?,?,?,?)";
+	const char* sql_dir = "insert into dir_info(frn,parentfrn,attrib,name) values(?,?,?,?)";
 	sqlite3_prepare_v2(db, sql_dir, strlen(sql_dir), &stmt_dir, 0);
 
 	iter = dirinfo_db.begin();
@@ -252,8 +254,10 @@ void recurse_record(const char drive_letter)
 		sqlite3_reset(stmt_dir);
 		sqlite3_bind_int64(stmt_dir, 1, iter->first);
 		sqlite3_bind_int64(stmt_dir, 2, iter->second.parent_frn);
-		sqlite3_bind_int64(stmt_dir, 4, iter->second.attrib);
-		sqlite3_bind_text(stmt_dir, 3, iter->second.filename.data(), -1, SQLITE_STATIC);
+		sqlite3_bind_int64(stmt_dir, 3, iter->second.attrib);
+		sqlite3_bind_text(stmt_dir, 4, iter->second.filename.data(), -1, SQLITE_STATIC);
+		
+		
 
 		sqlite3_step(stmt_dir);
 		iter++;
@@ -441,7 +445,7 @@ void updating_db(CChangeJrnl &m_cj, const char drive_letter)
 					ssm.str("");
 					filename.clear();
 					WCharToMByte(szFile, filename);
-					ssm << "insert into dir_info values(" << pRecord->FileReferenceNumber << ","
+					ssm << "replace into dir_info(frn,parentfrn,attrib,name) values(" << pRecord->FileReferenceNumber << ","
 						<< pRecord->ParentFileReferenceNumber << "," << pRecord->FileAttributes << ",'" << filename.data() << "')";
 					sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
 					Sleep(1);
@@ -470,20 +474,20 @@ void updating_db(CChangeJrnl &m_cj, const char drive_letter)
 				}
 			}
 			else {
-				// Process newly created directories
+				// Process newly created file
 				if (0 != (pRecord->Reason & USN_REASON_FILE_CREATE)) {
 					//	g_Globals.m_db.Add(pRecord->FileReferenceNumber, szFile,pRecord->ParentFileReferenceNumber);
 					ssm.clear();
 					ssm.str("");
 					filename.clear();
 					WCharToMByte(szFile, filename);
-					ssm << "insert into file_info values(" << pRecord->FileReferenceNumber << ","
+					ssm << "replace into file_info(frn,parentfrn,attrib,name) values(" << pRecord->FileReferenceNumber << ","
 						<< pRecord->ParentFileReferenceNumber << "," << pRecord->FileAttributes << ",'" << filename.data() << "')";
 					sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
 					Sleep(1);
 				}
 
-				// Process renamed directories
+				// Process renamed file
 				if (0 != (pRecord->Reason & USN_REASON_RENAME_NEW_NAME)) {
 					ssm.clear();
 					ssm.str("");
@@ -494,7 +498,7 @@ void updating_db(CChangeJrnl &m_cj, const char drive_letter)
 					Sleep(1);
 				}
 
-				// Process deleted directories
+				// Process deleted file
 				if (0 != (pRecord->Reason & USN_REASON_FILE_DELETE)) {
 					ssm.clear();
 					ssm.str("");
