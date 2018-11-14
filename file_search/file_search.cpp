@@ -13,6 +13,7 @@
 #include<windows.h>
 #include<map>
 #include<vector>
+#include<thread>
 #include "ChangeJrnl.h"
 
 #define MAX_DIR_LENGTH 4096
@@ -20,6 +21,7 @@ using namespace std;
 
 BOOL WCharToMByte(LPCWSTR lpcwszStr, std::string &str)
 {
+	str.clear();
 	DWORD dwMinSize = 0;
 	LPSTR lpszStr = NULL;
 	dwMinSize = WideCharToMultiByte(CP_OEMCP, NULL, lpcwszStr, -1, NULL, 0, NULL, FALSE);
@@ -36,17 +38,41 @@ BOOL WCharToMByte(LPCWSTR lpcwszStr, std::string &str)
 }
 
 
+time_t FileTimeToTime_t(FILETIME ft)
+{
+	LONGLONG ll;
+	ULARGE_INTEGER ui;
+	ui.LowPart = ft.dwLowDateTime;
+	ui.HighPart= ft.dwHighDateTime;
+	ll = ft.dwHighDateTime<< 32 + ft.dwLowDateTime;		//这一步是不是多余的
+	return ((LONGLONG)(ui.QuadPart - 116444736000000000) / 10000000);
+}
+
+time_t FileTimeToTime_t(LARGE_INTEGER ft)
+{
+	LONGLONG ll;
+	ULARGE_INTEGER ui;
+	ui.LowPart = ft.LowPart;
+	ui.HighPart = ft.HighPart;
+	ll = ft.HighPart << 32 + ft.LowPart;		//这一步是不是多余的
+	return ((LONGLONG)(ui.QuadPart - 116444736000000000) / 10000000);
+}
+
+
+
 struct file_info
 {
 	string filename;
 	DWORDLONG parent_frn;
 	DWORD attrib;
+	time_t write_time;
 };
 struct dir_info
 {
 	string filename;
 	DWORDLONG parent_frn;
 	DWORD attrib;
+	time_t write_time;
 	//vector<DWORDLONG> sub_dir_v;
 };
 
@@ -59,7 +85,7 @@ struct file_dir_db
 
 int file_count = 0;
 
-DWORDLONG get_frn_dir(LPCTSTR pszPath, bool &error)
+DWORDLONG get_frn_dir(LPCTSTR pszPath, DWORD volum_serial_number,bool &error)
 {
 	TCHAR szTempRecursePath[MAX_DIR_LENGTH];
 	lstrcpy(szTempRecursePath, pszPath);
@@ -76,11 +102,33 @@ DWORDLONG get_frn_dir(LPCTSTR pszPath, bool &error)
 	GetFileInformationByHandle(hDir, &fi);
 	CloseHandle(hDir);
 
+	if (volum_serial_number != fi.dwVolumeSerialNumber)
+		error = true;
+
 	LARGE_INTEGER index;
 	index.LowPart = fi.nFileIndexLow;
 	index.HighPart = fi.nFileIndexHigh;
 	return index.QuadPart;
 }
+
+DWORD get_volum_serial_number(LPCTSTR pszPath)
+{
+	TCHAR szTempRecursePath[MAX_DIR_LENGTH];
+	lstrcpy(szTempRecursePath, pszPath);
+	lstrcat(szTempRecursePath, TEXT("\\"));
+	//lstrcat(szTempRecursePath, pszFile);
+
+	HANDLE hDir = CreateFile(szTempRecursePath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+	if (INVALID_HANDLE_VALUE == hDir) {
+		cout << "error" << endl;
+	}
+	BY_HANDLE_FILE_INFORMATION fi;
+	GetFileInformationByHandle(hDir, &fi);
+	CloseHandle(hDir);
+	return fi.dwVolumeSerialNumber;
+}
+
 DWORDLONG get_frn_file(LPCTSTR pszPath, LPCTSTR pszFile, bool &error)
 {
 	TCHAR szTempRecursePath[MAX_DIR_LENGTH];
@@ -106,10 +154,9 @@ DWORDLONG get_frn_file(LPCTSTR pszPath, LPCTSTR pszFile, bool &error)
 
 void insert_fileinfo_into_db(sqlite3 *db, map<DWORDLONG, file_info> &fileinfo_db)
 {
-	//插入文件信息
 	sqlite3_exec(db, "begin;", 0, 0, 0);
 	sqlite3_stmt *stmt_file;
-	const char* sql_file = "insert into file_info(frn,parentfrn,attrib,name) values(?,?,?,?)";
+	const char* sql_file = "insert into file_info(frn,parentfrn,attrib,write_time,name) values(?,?,?,?,?)";
 	sqlite3_prepare_v2(db, sql_file, strlen(sql_file), &stmt_file, 0);
 	map<DWORDLONG, file_info>::iterator iter;
 	iter = fileinfo_db.begin();
@@ -120,7 +167,8 @@ void insert_fileinfo_into_db(sqlite3 *db, map<DWORDLONG, file_info> &fileinfo_db
 		sqlite3_bind_int64(stmt_file, 1, iter->first);
 		sqlite3_bind_int64(stmt_file, 2, iter->second.parent_frn);
 		sqlite3_bind_int64(stmt_file, 3, iter->second.attrib);
-		sqlite3_bind_text(stmt_file, 4, iter->second.filename.data(), -1, SQLITE_STATIC);
+		sqlite3_bind_int64(stmt_file, 4, iter->second.write_time);
+		sqlite3_bind_text(stmt_file, 5, iter->second.filename.data(), -1, SQLITE_STATIC);
 
 
 
@@ -134,7 +182,7 @@ void insert_dirinfo_into_db(sqlite3 *db, map<DWORDLONG, dir_info> &dirinfo_db)
 {
 	sqlite3_exec(db, "begin;", 0, 0, 0);
 	sqlite3_stmt *stmt_dir;
-	const char* sql_dir = "insert into dir_info(frn,parentfrn,attrib,name) values(?,?,?,?)";
+	const char* sql_dir = "insert into dir_info(frn,parentfrn,attrib,write_time,name) values(?,?,?,?)";
 	sqlite3_prepare_v2(db, sql_dir, strlen(sql_dir), &stmt_dir, 0);
 
 	map<DWORDLONG, dir_info>::iterator iter_dir;
@@ -145,9 +193,8 @@ void insert_dirinfo_into_db(sqlite3 *db, map<DWORDLONG, dir_info> &dirinfo_db)
 		sqlite3_bind_int64(stmt_dir, 1, iter_dir->first);
 		sqlite3_bind_int64(stmt_dir, 2, iter_dir->second.parent_frn);
 		sqlite3_bind_int64(stmt_dir, 3, iter_dir->second.attrib);
-		sqlite3_bind_text(stmt_dir, 4, iter_dir->second.filename.data(), -1, SQLITE_STATIC);
-
-
+		sqlite3_bind_int64(stmt_dir, 4, iter_dir->second.write_time);
+		sqlite3_bind_text(stmt_dir, 5, iter_dir->second.filename.data(), -1, SQLITE_STATIC);
 
 		sqlite3_step(stmt_dir);
 		iter_dir++;
@@ -162,78 +209,16 @@ void RecursePath(LPCTSTR pszPath, LPCTSTR pszFile,
 	map<DWORDLONG, file_info> &fileinfo_db, 
 	map<DWORDLONG, dir_info> &dirinfo_db) 
 {
-	if (fileinfo_db.size() > 10000)
+	if (fileinfo_db.size() > 50000)
 	{
 		insert_fileinfo_into_db(db, fileinfo_db);
 		fileinfo_db.clear();
 	}
-	// Enumerate the directores in the current path and store the file reference
-	// numbers in the database. Call this function recursively to enumerate into
-	// the subdirectores.
 	
 	file_info temp_fileinfo;
 	//dir_info temp_dirinfo;
 	bool error = FALSE;
-	/*
-	CString szPath2(pszPath);
-	szPath2 += TEXT("\\");
-	HANDLE hDir = CreateFile(szPath2, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-		NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
 
-	// NOTE: If we cannot get a handle to this, there is no need to recurs into
-	// it (even though it might be possible). Example - we couldn't open it, but
-	// FindFirst(...) succeeds for some reason. We don't care about any extra
-	// information we can get by FindFirst inside this directory since we won't
-	// have the FileIndex of this directory. Therefore, any objects under this
-	// directory will not be able to have their names fully resolved (ie: when
-	// we walk up the parent id's for an object below this one, we won't be able
-	// to find this id)
-	if (INVALID_HANDLE_VALUE == hDir) {
-		return;
-	}
-
-	BY_HANDLE_FILE_INFORMATION fi;
-	GetFileInformationByHandle(hDir, &fi);
-	CloseHandle(hDir);
-
-	if (0 == dwVolumeSerialNumber) {
-		dwVolumeSerialNumber = fi.dwVolumeSerialNumber;
-	}
-
-	if (fi.nNumberOfLinks != 1) {
-		//ASSERT(FALSE);
-	}
-
-	if (dwVolumeSerialNumber != fi.dwVolumeSerialNumber) {
-		// We've wondered onto another volume - This should only
-		// happen if we recursed into a reparse point, but we check
-		// for that below!
-		//ASSERT(FALSE);
-		return;
-	}
-
-	LARGE_INTEGER index;
-	index.LowPart = fi.nFileIndexLow;
-	index.HighPart = fi.nFileIndexHigh;
-	if (dirinfo_db.find(index.QuadPart) != dirinfo_db.end())
-		return;
-	//dir_set[index.QuadPart] = true;
-	//收集文件信息
-	temp_fileinfo.attrib = fi.dwFileAttributes;
-	//temp_fileinfo.frn = index.QuadPart;
-	temp_fileinfo.parent_frn = ParentIndex;
-	//WCharToMByte(szPath2, temp_fileinfo.path);
-	WCharToMByte(pszFile, temp_fileinfo.filename);
-	dirinfo_db[index.QuadPart] = temp_fileinfo;
-	/*
-	if (!Add(index.QuadPart, pszFile, ParentIndex)) {
-	// Duplicate - The FRN for this directory was already
-	// in our database. This shouldn't happen, but if it
-	// does, there's no need to recurse into sub-directories
-	return;
-	}
-	
-	*/
 	TCHAR szTempPath[MAX_DIR_LENGTH];
 	lstrcpy(szTempPath, pszPath);
 	lstrcat(szTempPath, TEXT("\\*.*"));
@@ -259,12 +244,13 @@ void RecursePath(LPCTSTR pszPath, LPCTSTR pszFile,
 			//	_tprintf( szTempRecursePath);
 			//	cout << endl;
 			error = FALSE;
-			DWORDLONG temp_frn = get_frn_dir(szTempRecursePath, error);
+			DWORDLONG temp_frn = get_frn_dir(szTempRecursePath, dwVolumeSerialNumber, error);
 			if (!error&&dirinfo_db.find(temp_frn) == dirinfo_db.end())
 			{	
 				//填充文件信息
 				dirinfo_db[temp_frn].parent_frn = ParentIndex;
 				dirinfo_db[temp_frn].attrib = fd.dwFileAttributes;
+				dirinfo_db[temp_frn].write_time = FileTimeToTime_t(fd.ftLastWriteTime);
 				string filename;
 				WCharToMByte(fd.cFileName, filename);
 				temp_fileinfo.attrib = fd.dwFileAttributes;
@@ -289,6 +275,7 @@ void RecursePath(LPCTSTR pszPath, LPCTSTR pszFile,
 					continue;
 				file_count++;
 				fileinfo_db[temp_frn] = temp_fileinfo;
+				fileinfo_db[temp_frn].write_time= FileTimeToTime_t(fd.ftLastWriteTime);
 			}
 
 		}
@@ -310,15 +297,12 @@ void recurse_record(file_dir_db &temp_db)
 	if (rc) {
 		fprintf(stderr, "Can't open database: %s\n", sqlite3_errmsg(db));
 	}
-	else {
-		fprintf(stderr, "Opened database successfully\n");
-	}
 	//创建数据表
 	sqlite3_exec(db, "PRAGMA synchronous = OFF; ", 0, 0, 0);
 	sqlite3_exec(db, "drop table if exists file_info", 0, 0, 0);
-	sqlite3_exec(db, "create  table file_info (frn integer primary key,parentfrn integer,attrib integer ,name text);", 0, 0, &zErrMsg);
+	sqlite3_exec(db, "create  table file_info (frn integer primary key,parentfrn integer,attrib integer ,write_time,name text);", 0, 0, &zErrMsg);
 	sqlite3_exec(db, "drop table if exists dir_info", 0, 0, 0);
-	sqlite3_exec(db, "create  table dir_info (frn integer primary key,parentfrn integer,attrib integer ,name text);", 0, 0, &zErrMsg);
+	sqlite3_exec(db, "create  table dir_info (frn integer primary key,parentfrn integer,attrib integer ,write_time,name text);", 0, 0, &zErrMsg);
 	sqlite3_exec(db, "create index frn_index on dir_info(frn);", 0, 0, &zErrMsg);
 	//将信息收集到内存
 //	map<DWORDLONG, file_info> fileinfo_db;
@@ -326,13 +310,14 @@ void recurse_record(file_dir_db &temp_db)
 	TCHAR szCurrentPath[MAX_DIR_LENGTH];
 	wsprintf(szCurrentPath, TEXT("%c:"), temp_db.drive_letter);
 	//wsprintf(szCurrentPath, TEXT("%s:"), "c:\\Users\\fenhuo\\Documents\\Visual Studio 2015\\Projects");
-	lstrcat(szCurrentPath, TEXT("\\Users\\fenhuo\\Documents\\Visual Studio 2015\\Projects\\file_search\\file_search"));
-	RecursePath(szCurrentPath, szCurrentPath, 0, 0, db,temp_db.fileinfo_db, temp_db.dirinfo_db);
+	//lstrcat(szCurrentPath, TEXT("\\Users\\fenhuo\\Documents\\Visual Studio 2015\\Projects\\file_search\\file_search"));
+	DWORD volum_serial_number = get_volum_serial_number(szCurrentPath);
+	RecursePath(szCurrentPath, szCurrentPath, 0, volum_serial_number, db,temp_db.fileinfo_db, temp_db.dirinfo_db);
 
 	//插入文件信息
 	sqlite3_exec(db, "begin;", 0, 0, 0);
 	sqlite3_stmt *stmt_file;
-	const char* sql_file = "insert into file_info(frn,parentfrn,attrib,name) values(?,?,?,?)";
+	const char* sql_file = "insert into file_info(frn,parentfrn,attrib,write_time,name) values(?,?,?,?,?)";
 	sqlite3_prepare_v2(db, sql_file, strlen(sql_file), &stmt_file, 0);
 	map<DWORDLONG, file_info>::iterator iter;
 	iter = temp_db.fileinfo_db.begin();
@@ -343,7 +328,8 @@ void recurse_record(file_dir_db &temp_db)
 		sqlite3_bind_int64(stmt_file, 1, iter->first);
 		sqlite3_bind_int64(stmt_file, 2, iter->second.parent_frn);
 		sqlite3_bind_int64(stmt_file, 3, iter->second.attrib);
-		sqlite3_bind_text(stmt_file, 4, iter->second.filename.data(), -1, SQLITE_STATIC);
+		sqlite3_bind_int64(stmt_file, 4, iter->second.write_time);
+		sqlite3_bind_text(stmt_file, 5, iter->second.filename.data(), -1, SQLITE_STATIC);
 		
 		
 
@@ -353,11 +339,11 @@ void recurse_record(file_dir_db &temp_db)
 	sqlite3_finalize(stmt_file);
 	sqlite3_exec(db, "commit;", 0, 0, 0);
 
-	temp_db.fileinfo_db.~map();//清空内存中的文件信息
+	//temp_db.fileinfo_db.~map();//清空内存中的文件信息
 	//插入目录信息
 	sqlite3_exec(db, "begin;", 0, 0, 0);
 	sqlite3_stmt *stmt_dir;
-	const char* sql_dir = "insert into dir_info(frn,parentfrn,attrib,name) values(?,?,?,?)";
+	const char* sql_dir = "insert into dir_info(frn,parentfrn,attrib,write_time,name) values(?,?,?,?,?)";
 	sqlite3_prepare_v2(db, sql_dir, strlen(sql_dir), &stmt_dir, 0);
 
 	map<DWORDLONG, dir_info>::iterator iter_dir;
@@ -368,7 +354,8 @@ void recurse_record(file_dir_db &temp_db)
 		sqlite3_bind_int64(stmt_dir, 1, iter_dir->first);
 		sqlite3_bind_int64(stmt_dir, 2, iter_dir->second.parent_frn);
 		sqlite3_bind_int64(stmt_dir, 3, iter_dir->second.attrib);
-		sqlite3_bind_text(stmt_dir, 4, iter_dir->second.filename.data(), -1, SQLITE_STATIC);
+		sqlite3_bind_int64(stmt_dir, 4, iter_dir->second.write_time);
+		sqlite3_bind_text(stmt_dir, 5, iter_dir->second.filename.data(), -1, SQLITE_STATIC);
 		
 		
 
@@ -381,7 +368,7 @@ void recurse_record(file_dir_db &temp_db)
 	cout << file_count;
 	sqlite3_close(db);
 }
-
+//-----------------------------------------------------------------------------------------------------
 void populate_dirinfo_mem(file_dir_db &temp_db)
 {
 	sqlite3 *db;
@@ -461,15 +448,15 @@ void init_changejrn(CChangeJrnl &m_cj ,char drive_letter)
 	
 }
 
-void initial_file_db(CChangeJrnl &m_cj, file_dir_db &temp_db)
+void initial_file_db(CChangeJrnl &m_cj, char drive_letter)
 {
-	init_changejrn( m_cj, temp_db.drive_letter);
+	init_changejrn( m_cj, drive_letter);
 	
 	sqlite3 *db;
 	char *zErrMsg = 0;
 	int rc;
 	stringstream ssm;
-	ssm << temp_db.drive_letter << "_" << "file_search.db";
+	ssm << drive_letter << "_" << "file_search.db";
 	rc = sqlite3_open(ssm.str().c_str(), &db);
 
 	if (rc) {
@@ -504,7 +491,7 @@ void initial_file_db(CChangeJrnl &m_cj, file_dir_db &temp_db)
 		if (current_journal_id == m_cj.m_rujd.UsnJournalID)
 		{
 			m_cj.SeekToUsn(current_usn, 0xFFFFFFFF, FALSE, current_journal_id);
-			populate_dirinfo_mem(temp_db);
+		//	populate_dirinfo_mem(temp_db);
 			return;
 		}
 
@@ -527,9 +514,15 @@ void initial_file_db(CChangeJrnl &m_cj, file_dir_db &temp_db)
 		}
 
 	}
+
+
+	file_dir_db temp_db;
+	temp_db.drive_letter = drive_letter;
+	cout << ssm.str().c_str();
+	remove(ssm.str().c_str());
 	recurse_record(temp_db);
 	//更新usn_check_point
-	//char *zErrMsg = 0;
+	//重新扫描磁盘前删除原有的
 	rc = sqlite3_open(ssm.str().c_str(), &db);
 	if (rc) {
 		fprintf(stderr, "Can't open database: %s\n", sqlite3_errmsg(db));
@@ -537,6 +530,7 @@ void initial_file_db(CChangeJrnl &m_cj, file_dir_db &temp_db)
 	else {
 		fprintf(stderr, "Opened database successfully\n");
 	}
+	sqlite3_exec(db, "create table if not exists usn_check_point(id integer,usn integer,usn_journal_id integer)", 0, 0, 0);
 	sqlite3_exec(db, "delete from usn_check_point where id=0;", 0, 0, &zErrMsg);
 	ssm.clear();
 	ssm.str("");
@@ -544,15 +538,15 @@ void initial_file_db(CChangeJrnl &m_cj, file_dir_db &temp_db)
 	sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
 	sqlite3_close(db);
 }
-
-void updating_db(CChangeJrnl &m_cj, file_dir_db &temp_db)
+//-----------------------------------------------------------------------------------------------------
+void updating_db(CChangeJrnl &m_cj, char drive_letter)
 {
 	sqlite3 *db;
 	char *zErrMsg = 0;
 	int rc;
 	stringstream ssm;
 	string filename;
-	ssm << temp_db.drive_letter << "_" << "file_search.db";
+	ssm << drive_letter << "_" << "file_search.db";
 	rc = sqlite3_open(ssm.str().c_str(), &db);
 
 	if (rc) {
@@ -593,14 +587,10 @@ void updating_db(CChangeJrnl &m_cj, file_dir_db &temp_db)
 					ssm.str("");
 					filename.clear();
 					WCharToMByte(szFile, filename);
-					ssm << "insert into dir_info(frn,parentfrn,attrib,name) values(" << pRecord->FileReferenceNumber << ","
-						<< pRecord->ParentFileReferenceNumber << "," << pRecord->FileAttributes << ",'" << filename.data() << "')";
+					ssm << "insert into dir_info(frn,parentfrn,attrib,write_time,name) values(" << pRecord->FileReferenceNumber << ","
+						<< pRecord->ParentFileReferenceNumber << "," << pRecord->FileAttributes <<","<< FileTimeToTime_t(pRecord->TimeStamp)<<",'" << filename.data() << "')";
 					sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
 
-					temp_dir_info.attrib = pRecord->FileAttributes;;
-					temp_dir_info.filename = filename;
-					temp_dir_info.parent_frn = pRecord->ParentFileReferenceNumber;
-					temp_db.dirinfo_db[pRecord->FileReferenceNumber] = temp_dir_info;
 					//Sleep(1);
 				}
 
@@ -611,13 +601,9 @@ void updating_db(CChangeJrnl &m_cj, file_dir_db &temp_db)
 					ssm.str("");
 					filename.clear();
 					WCharToMByte(szFile, filename);
-					ssm << "update dir_info set name='" << filename.data() << "' where frn=" << pRecord->FileReferenceNumber;
+					ssm << "update dir_info set name='" << filename.data() << "',"<< "write_time="<< FileTimeToTime_t(pRecord->TimeStamp)<<" where frn=" << pRecord->FileReferenceNumber;
 					sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
 
-					temp_dir_info.attrib = pRecord->FileAttributes;;
-					temp_dir_info.filename = filename;
-					temp_dir_info.parent_frn = pRecord->ParentFileReferenceNumber;
-					temp_db.dirinfo_db[pRecord->FileReferenceNumber] = temp_dir_info;
 					Sleep(1);
 				}
 
@@ -629,7 +615,6 @@ void updating_db(CChangeJrnl &m_cj, file_dir_db &temp_db)
 					ssm << "delete from dir_info where frn=" << pRecord->FileReferenceNumber;
 					sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
 
-					temp_db.dirinfo_db.erase(pRecord->FileReferenceNumber);
 				}
 			}
 			else {
@@ -640,8 +625,8 @@ void updating_db(CChangeJrnl &m_cj, file_dir_db &temp_db)
 					ssm.str("");
 					filename.clear();
 					WCharToMByte(szFile, filename);
-					ssm << "insert  into file_info(frn,parentfrn,attrib,name) values(" << pRecord->FileReferenceNumber << ","
-						<< pRecord->ParentFileReferenceNumber << "," << pRecord->FileAttributes << ",'" << filename.data() << "')";
+					ssm << "insert  into file_info(frn,parentfrn,attrib,write_time,name) values(" << pRecord->FileReferenceNumber << ","
+						<< pRecord->ParentFileReferenceNumber << "," << pRecord->FileAttributes << "," << FileTimeToTime_t(pRecord->TimeStamp) << ",'" << filename.data() << "')";
 					sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
 					Sleep(1);
 				}
@@ -652,7 +637,7 @@ void updating_db(CChangeJrnl &m_cj, file_dir_db &temp_db)
 					ssm.str("");
 					filename.clear();
 					WCharToMByte(szFile, filename);
-					ssm << "update file_info set name='" << filename.data() << "' where frn=" << pRecord->FileReferenceNumber;
+					ssm << "update file_info set name='" << filename.data() << "',"<<" write_time="<< FileTimeToTime_t(pRecord->TimeStamp)<<" where frn=" << pRecord->FileReferenceNumber;
 					sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
 					Sleep(1);
 				}
@@ -678,18 +663,75 @@ void updating_db(CChangeJrnl &m_cj, file_dir_db &temp_db)
 	sqlite3_close(db);
 }
 
+BOOL is_ntfs(LPWSTR szDrive) {
+	UINT uDriveType;   //驱动器类型
+	DWORD dwVolumeSerialNumber;     //卷序列号
+	DWORD dwMaximumComponentLength;  //最大组件长度
+	DWORD dwFileSystemFlags;   //文件系统标识
+	TCHAR szFileSystemNameBuffer[1024];  //文件系统名称缓冲
+	TCHAR szDirverName[MAX_PATH]; //驱动器名称
+								  //最大字符长度的路径。
+	std::string name;
+	uDriveType = GetDriveType(szDrive);  //获取驱动器的物理类型  该函数返回驱动器类型
+	if (uDriveType != DRIVE_FIXED&&uDriveType != DRIVE_REMOVABLE)
+		return FALSE;
+
+	if (!GetVolumeInformation(szDrive, szDirverName, MAX_PATH, &dwVolumeSerialNumber, &dwMaximumComponentLength,
+		&dwFileSystemFlags, szFileSystemNameBuffer, 1024)) {    //获取驱动器的相关属性
+		return FALSE;
+	}
+	WCharToMByte(szFileSystemNameBuffer, name);
+	if (name == "NTFS")
+		return TRUE;
+	else
+		return FALSE;
+}
+
+vector<char> get_drives() {
+	TCHAR szLogicDriveStrings[1024];
+	TCHAR *szDrive;
+	std::vector<char> driver_letters;
+	std::string driver_string;
+
+	ZeroMemory(szLogicDriveStrings, 1024);
+
+	GetLogicalDriveStrings(1024 - 1, szLogicDriveStrings);
+	szDrive = szLogicDriveStrings;
+
+	do
+	{
+		if (is_ntfs(szDrive))
+		{
+			WCharToMByte(szDrive, driver_string);
+			driver_letters.push_back(driver_string.data()[0]);
+		}
+		szDrive += (lstrlen(szDrive) + 1);
+	} while (*szDrive != '\x00');
+	return driver_letters;
+}
+
 int main(int argc, char* argv[])
 {
-	
-	//recurse_record('c');
+	vector<char> driver_letters=get_drives();
+/*
 	CChangeJrnl m_cj;
-	//init_changejrn( m_cj,  'c');
-	//map<DWORDLONG, dir_info> dirinfo_db;
-	file_dir_db temp_db;
-	temp_db.drive_letter = 'c';
-	initial_file_db(m_cj, temp_db);
-	updating_db(m_cj, temp_db);
+	char drive_letter = driver_letters.at(1);
+	initial_file_db(m_cj, drive_letter);
+	updating_db(m_cj, drive_letter);
+*/
 
+
+	vector<thread> threads;
+	for (int i = 0; i < driver_letters.size(); i++)
+	{
+		threads.push_back(thread([&]() {
+			CChangeJrnl m_cj;
+			char drive_letter = driver_letters.at(i);
+			initial_file_db(m_cj, drive_letter);
+			updating_db(m_cj, drive_letter);
+		}));
+	}
+	for (auto& th : threads)th.join();
 	return 0;
 }
 
