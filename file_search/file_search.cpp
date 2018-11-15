@@ -463,9 +463,6 @@ void initial_file_db(CChangeJrnl &m_cj, char drive_letter)
 	if (rc) {
 		fprintf(stderr, "Can't open database: %s\n", sqlite3_errmsg(db));
 	}
-	else {
-		fprintf(stderr, "Opened database successfully\n");
-	}
 	//创建数据表
 	bool has_check_point=false;
 	int id;
@@ -528,9 +525,6 @@ void initial_file_db(CChangeJrnl &m_cj, char drive_letter)
 	if (rc) {
 		fprintf(stderr, "Can't open database: %s\n", sqlite3_errmsg(db));
 	}
-	else {
-		fprintf(stderr, "Opened database successfully\n");
-	}
 	sqlite3_exec(db, "create table if not exists usn_check_point(id integer,usn integer,usn_journal_id integer)", 0, 0, 0);
 	sqlite3_exec(db, "delete from usn_check_point where id=0;", 0, 0, &zErrMsg);
 	ssm.clear();
@@ -554,9 +548,7 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 		fprintf(stderr, "Can't open database: %s\n", sqlite3_errmsg(db));
 		return;
 	}
-	else {
-		fprintf(stderr, "Opened database successfully\n");
-	}
+
 	sqlite3_exec(db, "PRAGMA synchronous = OFF; ", 0, 0, 0);
 	
 
@@ -659,11 +651,9 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 		sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
 		sqlite3_exec(db, "commit;", 0, 0, 0);
 		if (!m_cj.NotifyMoreData(1000))
-		break;//重新启动
+		return;//重新启动
 	}
 	sqlite3_close(db);
-	initial_file_db(m_cj, drive_letter);
-	thread th(updating_db,m_cj,drive_letter);//回收当前栈空间
 }
 
 BOOL is_ntfs(LPWSTR szDrive) {
@@ -730,8 +720,12 @@ int main(int argc, char* argv[])
 		threads.push_back(thread([&]() {
 			CChangeJrnl m_cj;
 			char drive_letter = driver_letters.at(i);
-			initial_file_db(m_cj, drive_letter);
-			updating_db(m_cj, drive_letter);
+			while (true)
+			{
+				initial_file_db(m_cj, drive_letter);
+				updating_db(m_cj, drive_letter);
+			}
+			
 		}));
 	}
 	for (auto& th : threads)th.join();
