@@ -300,9 +300,9 @@ void recurse_record(file_dir_db &temp_db)
 	//创建数据表
 	sqlite3_exec(db, "PRAGMA synchronous = OFF; ", 0, 0, 0);
 	sqlite3_exec(db, "drop table if exists file_info", 0, 0, 0);
-	sqlite3_exec(db, "create  table file_info (frn integer primary key,parentfrn integer,attrib integer ,write_time,name text);", 0, 0, &zErrMsg);
+	sqlite3_exec(db, "create  table file_info (frn integer primary key,parentfrn integer,attrib integer ,write_time integer,name text);", 0, 0, &zErrMsg);
 	sqlite3_exec(db, "drop table if exists dir_info", 0, 0, 0);
-	sqlite3_exec(db, "create  table dir_info (frn integer primary key,parentfrn integer,attrib integer ,write_time,name text);", 0, 0, &zErrMsg);
+	sqlite3_exec(db, "create  table dir_info (frn integer primary key,parentfrn integer,attrib integer ,write_time integer,name text);", 0, 0, &zErrMsg);
 	sqlite3_exec(db, "create index frn_index on dir_info(frn);", 0, 0, &zErrMsg);
 	//将信息收集到内存
 //	map<DWORDLONG, file_info> fileinfo_db;
@@ -312,7 +312,8 @@ void recurse_record(file_dir_db &temp_db)
 	//wsprintf(szCurrentPath, TEXT("%s:"), "c:\\Users\\fenhuo\\Documents\\Visual Studio 2015\\Projects");
 	//lstrcat(szCurrentPath, TEXT("\\Users\\fenhuo\\Documents\\Visual Studio 2015\\Projects\\file_search\\file_search"));
 	DWORD volum_serial_number = get_volum_serial_number(szCurrentPath);
-	RecursePath(szCurrentPath, szCurrentPath, 0, volum_serial_number, db,temp_db.fileinfo_db, temp_db.dirinfo_db);
+	bool error;
+	RecursePath(szCurrentPath, szCurrentPath, get_frn_dir(szCurrentPath,0,error), volum_serial_number, db,temp_db.fileinfo_db, temp_db.dirinfo_db);
 
 	//插入文件信息
 	sqlite3_exec(db, "begin;", 0, 0, 0);
@@ -657,10 +658,12 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 		ssm << "update usn_check_point set usn=" << m_cj.m_rujd.StartUsn<<",usn_journal_id="<<m_cj.m_rujd.UsnJournalID<< " where id=0";
 		sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
 		sqlite3_exec(db, "commit;", 0, 0, 0);
-		if(!m_cj.NotifyMoreData(1000))
-		return;
+		if (!m_cj.NotifyMoreData(1000))
+		break;//重新启动
 	}
 	sqlite3_close(db);
+	initial_file_db(m_cj, drive_letter);
+	thread th(updating_db,m_cj,drive_letter);//回收当前栈空间
 }
 
 BOOL is_ntfs(LPWSTR szDrive) {
