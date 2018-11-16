@@ -13,11 +13,151 @@
 #include<windows.h>
 #include<map>
 #include<vector>
+#include<list>
+#include<stack>
 #include<thread>
 #include "ChangeJrnl.h"
 
 #define MAX_DIR_LENGTH 4096
 using namespace std;
+struct file_info
+{
+	string filename;
+	DWORDLONG parent_frn;
+	DWORD attrib;
+	time_t write_time;
+	DWORDLONG file_size;
+};
+struct dir_info
+{
+	string filename;
+	DWORDLONG parent_frn;
+	DWORD attrib;
+	time_t write_time;
+	//vector<DWORDLONG> sub_dir_v;
+};
+
+struct file_dir_db
+{
+	char drive_letter;
+	map<DWORDLONG, file_info> fileinfo_db;
+	map<DWORDLONG, dir_info> dirinfo_db;
+};
+
+class file_size
+{
+public:
+	file_size(sqlite3 *db, DWORDLONG target_frn, char drive_letter);
+	~file_size();
+	bool get_file_size(DWORDLONG &file_size, DWORDLONG frn);
+
+private:
+	sqlite3 *db;
+	sqlite3_stmt * parent_dir_stmt;
+	sqlite3_stmt * file_stmt;
+	DWORDLONG target_frn;
+	DWORDLONG parent_frn;
+	string filename;
+	char drive_letter;
+	bool get_addr(stringstream &ssm);
+	dir_info get_parent_dirinfo(DWORDLONG frn, bool &error);
+};
+
+file_size::file_size(sqlite3 *db, DWORDLONG target_frn, char drive_letter) :
+	db(db), target_frn(target_frn), drive_letter(drive_letter)
+{
+	parent_dir_stmt = NULL;
+	const char* sql_parent_dir = "SELECT * FROM dir_info where frn= ?;";
+	sqlite3_prepare_v2(db, sql_parent_dir, strlen(sql_parent_dir), &parent_dir_stmt, 0);
+
+	file_stmt = NULL;
+	const char* sql_file_parent = "SELECT * FROM file_info where frn= ?;";
+	sqlite3_prepare_v2(db, sql_file_parent, strlen(sql_file_parent), &file_stmt, 0);
+	
+}
+
+file_size::~file_size()
+{
+	sqlite3_finalize(parent_dir_stmt);
+}
+
+dir_info file_size::get_parent_dirinfo(DWORDLONG frn, bool &error)
+{
+	dir_info temp_dir_info;
+	//const char* sql_parent_dir = "SELECT * FROM dir_info where frn= ?;";
+	//sqlite3_prepare_v2(db, sql_parent_dir, strlen(sql_parent_dir), &stmt, 0);
+
+	sqlite3_reset(parent_dir_stmt);
+	sqlite3_bind_int64(parent_dir_stmt, 1, frn);
+	if (sqlite3_step(parent_dir_stmt) == SQLITE_ROW) {
+		temp_dir_info.parent_frn = sqlite3_column_int64(parent_dir_stmt, 1);
+		temp_dir_info.attrib = sqlite3_column_int64(parent_dir_stmt, 2);
+		temp_dir_info.write_time = sqlite3_column_int64(parent_dir_stmt, 3);
+		string name((const char *)sqlite3_column_text(parent_dir_stmt, 4));
+		temp_dir_info.filename = name;
+		error = false;
+	}
+	else
+		error = true;
+	return temp_dir_info;
+}
+
+bool file_size::get_addr(stringstream &ssm)
+{
+	stack<string> dir_stack;
+	bool uder_target_dir = false;
+	DWORDLONG temp_parent_frn = parent_frn;
+	bool error;
+	while (true)
+	{
+
+		if (temp_parent_frn == target_frn)
+			break;
+		dir_stack.push(get_parent_dirinfo(temp_parent_frn, error).filename);
+		if (error)
+			return false;
+		temp_parent_frn = get_parent_dirinfo(temp_parent_frn, error).parent_frn;
+		if (error)
+			return false;
+	}
+	ssm.clear();
+	ssm.str("");
+	ssm << drive_letter << ":\\";
+	while (!dir_stack.empty())
+	{
+		ssm << dir_stack.top().data() << "\\";
+		dir_stack.pop();
+	}
+	ssm <<filename;
+//	cout << ssm.str();
+	return true;
+}
+
+bool file_size::get_file_size(DWORDLONG &file_size,DWORDLONG frn)
+{
+	sqlite3_reset(file_stmt);
+	sqlite3_bind_int64(file_stmt, 1, frn);
+	if (sqlite3_step(file_stmt) == SQLITE_ROW) {
+		parent_frn = sqlite3_column_int64(file_stmt, 1);
+		string name((const char *)sqlite3_column_text(file_stmt, 5));
+		filename = name;
+	}
+	stringstream  ssm;
+	if (!get_addr(ssm))
+		return false;
+	TCHAR szCurrentPath[4096];
+	wsprintf(szCurrentPath, TEXT("%S"), ssm.str().c_str());
+	HANDLE hDir = CreateFile(szCurrentPath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+	if (INVALID_HANDLE_VALUE == hDir) {
+		return false;
+	}
+	BY_HANDLE_FILE_INFORMATION fi;
+	GetFileInformationByHandle(hDir, &fi);
+	CloseHandle(hDir);
+	file_size = (fi.nFileSizeHigh * (MAXDWORD + 1)) + fi.nFileSizeLow;
+}
+
 
 BOOL WCharToMByte(LPCWSTR lpcwszStr, std::string &str)
 {
@@ -59,29 +199,6 @@ time_t FileTimeToTime_t(LARGE_INTEGER ft)
 }
 
 
-
-struct file_info
-{
-	string filename;
-	DWORDLONG parent_frn;
-	DWORD attrib;
-	time_t write_time;
-};
-struct dir_info
-{
-	string filename;
-	DWORDLONG parent_frn;
-	DWORD attrib;
-	time_t write_time;
-	//vector<DWORDLONG> sub_dir_v;
-};
-
-struct file_dir_db
-{
-	char drive_letter;
-	map<DWORDLONG, file_info> fileinfo_db;
-	map<DWORDLONG, dir_info> dirinfo_db;
-};
 
 int file_count = 0;
 
@@ -156,7 +273,7 @@ void insert_fileinfo_into_db(sqlite3 *db, map<DWORDLONG, file_info> &fileinfo_db
 {
 	sqlite3_exec(db, "begin;", 0, 0, 0);
 	sqlite3_stmt *stmt_file;
-	const char* sql_file = "insert into file_info(frn,parentfrn,attrib,write_time,name) values(?,?,?,?,?)";
+	const char* sql_file = "insert into file_info(frn,parentfrn,attrib,write_time,file_size,name) values(?,?,?,?,?,?)";
 	sqlite3_prepare_v2(db, sql_file, strlen(sql_file), &stmt_file, 0);
 	map<DWORDLONG, file_info>::iterator iter;
 	iter = fileinfo_db.begin();
@@ -168,7 +285,8 @@ void insert_fileinfo_into_db(sqlite3 *db, map<DWORDLONG, file_info> &fileinfo_db
 		sqlite3_bind_int64(stmt_file, 2, iter->second.parent_frn);
 		sqlite3_bind_int64(stmt_file, 3, iter->second.attrib);
 		sqlite3_bind_int64(stmt_file, 4, iter->second.write_time);
-		sqlite3_bind_text(stmt_file, 5, iter->second.filename.data(), -1, SQLITE_STATIC);
+		sqlite3_bind_int64(stmt_file, 5, iter->second.file_size);
+		sqlite3_bind_text(stmt_file, 6, iter->second.filename.data(), -1, SQLITE_STATIC);
 
 
 
@@ -253,7 +371,6 @@ void RecursePath(LPCTSTR pszPath, LPCTSTR pszFile,
 				dirinfo_db[temp_frn].write_time = FileTimeToTime_t(fd.ftLastWriteTime);
 				string filename;
 				WCharToMByte(fd.cFileName, filename);
-				temp_fileinfo.attrib = fd.dwFileAttributes;
 				dirinfo_db[temp_frn].filename = filename;
 				RecursePath(szTempRecursePath, fd.cFileName, temp_frn,
 					dwVolumeSerialNumber,db, fileinfo_db, dirinfo_db);
@@ -270,6 +387,7 @@ void RecursePath(LPCTSTR pszPath, LPCTSTR pszFile,
 				WCharToMByte(fd.cFileName, temp_fileinfo.filename);
 				temp_fileinfo.attrib = fd.dwFileAttributes;
 				temp_fileinfo.parent_frn = ParentIndex;
+				temp_fileinfo.file_size = (fd.nFileSizeHigh * (MAXDWORD + 1)) + fd.nFileSizeLow;
 				DWORDLONG temp_frn = get_frn_file(pszPath,fd.cFileName, error);
 				if (error)
 					continue;
@@ -300,7 +418,7 @@ void recurse_record(file_dir_db &temp_db)
 	//创建数据表
 	sqlite3_exec(db, "PRAGMA synchronous = OFF; ", 0, 0, 0);
 	sqlite3_exec(db, "drop table if exists file_info", 0, 0, 0);
-	sqlite3_exec(db, "create  table file_info (frn integer primary key,parentfrn integer,attrib integer ,write_time integer,name text);", 0, 0, &zErrMsg);
+	sqlite3_exec(db, "create  table file_info (frn integer primary key,parentfrn integer,attrib integer ,write_time integer,file_size integer,name text);", 0, 0, &zErrMsg);
 	sqlite3_exec(db, "drop table if exists dir_info", 0, 0, 0);
 	sqlite3_exec(db, "create  table dir_info (frn integer primary key,parentfrn integer,attrib integer ,write_time integer,name text);", 0, 0, &zErrMsg);
 	sqlite3_exec(db, "create index frn_index on dir_info(frn);", 0, 0, &zErrMsg);
@@ -318,7 +436,7 @@ void recurse_record(file_dir_db &temp_db)
 	//插入文件信息
 	sqlite3_exec(db, "begin;", 0, 0, 0);
 	sqlite3_stmt *stmt_file;
-	const char* sql_file = "insert into file_info(frn,parentfrn,attrib,write_time,name) values(?,?,?,?,?)";
+	const char* sql_file = "insert into file_info(frn,parentfrn,attrib,write_time,file_size,name) values(?,?,?,?,?,?)";
 	sqlite3_prepare_v2(db, sql_file, strlen(sql_file), &stmt_file, 0);
 	map<DWORDLONG, file_info>::iterator iter;
 	iter = temp_db.fileinfo_db.begin();
@@ -330,7 +448,8 @@ void recurse_record(file_dir_db &temp_db)
 		sqlite3_bind_int64(stmt_file, 2, iter->second.parent_frn);
 		sqlite3_bind_int64(stmt_file, 3, iter->second.attrib);
 		sqlite3_bind_int64(stmt_file, 4, iter->second.write_time);
-		sqlite3_bind_text(stmt_file, 5, iter->second.filename.data(), -1, SQLITE_STATIC);
+		sqlite3_bind_int64(stmt_file, 5, iter->second.file_size);
+		sqlite3_bind_text(stmt_file, 6, iter->second.filename.data(), -1, SQLITE_STATIC);
 		
 		
 
@@ -536,6 +655,11 @@ void initial_file_db(CChangeJrnl &m_cj, char drive_letter)
 //-----------------------------------------------------------------------------------------------------
 void updating_db(CChangeJrnl &m_cj, char drive_letter)
 {
+	TCHAR rootPath[MAX_DIR_LENGTH];
+	wsprintf(rootPath, TEXT("%c:"), drive_letter);
+	bool error;
+	DWORDLONG root_frn = get_frn_dir(rootPath, 0, error);
+
 	sqlite3 *db;
 	char *zErrMsg = 0;
 	int rc;
@@ -550,12 +674,16 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 	}
 
 	sqlite3_exec(db, "PRAGMA synchronous = OFF; ", 0, 0, 0);
-	
+	file_size new_size(db, root_frn, drive_letter);
+	DWORDLONG file_size;
 
 	PUSN_RECORD pRecord;
 	dir_info temp_dir_info;
+	map<DWORDLONG, DWORDLONG> remind_filesize_v;
+	
 	while (true)
 	{
+		
 		//准备更新数据库
 		sqlite3_exec(db, "begin;", 0, 0, 0);
 		// Use EnumNext to loop through available records
@@ -618,8 +746,8 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 					ssm.str("");
 					filename.clear();
 					WCharToMByte(szFile, filename);
-					ssm << "insert  into file_info(frn,parentfrn,attrib,write_time,name) values(" << pRecord->FileReferenceNumber << ","
-						<< pRecord->ParentFileReferenceNumber << "," << pRecord->FileAttributes << "," << FileTimeToTime_t(pRecord->TimeStamp) << ",'" << filename.data() << "')";
+					ssm << "insert  into file_info(frn,parentfrn,attrib,write_time,file_size,name) values(" << pRecord->FileReferenceNumber << ","
+						<< pRecord->ParentFileReferenceNumber << "," << pRecord->FileAttributes << "," << FileTimeToTime_t(pRecord->TimeStamp) <<","<<0<< ",'" << filename.data() << "')";
 					sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
 					Sleep(1);
 				}
@@ -643,6 +771,10 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 					sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
 					Sleep(1);
 				}
+
+				if (0 != (pRecord->Reason & USN_REASON_CLOSE)) {
+					remind_filesize_v[pRecord->FileReferenceNumber] = 0;
+				}
 			}
 		}
 		ssm.clear();
@@ -650,8 +782,37 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 		ssm << "update usn_check_point set usn=" << m_cj.m_rujd.StartUsn<<",usn_journal_id="<<m_cj.m_rujd.UsnJournalID<< " where id=0";
 		sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
 		sqlite3_exec(db, "commit;", 0, 0, 0);
+
+		//将文件大小信息补充更新
+		for (auto & frn : remind_filesize_v)
+		{
+			if (new_size.get_file_size(file_size,frn.first))
+			{
+				remind_filesize_v[frn.first] = file_size;
+			}
+		}
+
+		sqlite3_exec(db, "begin;", 0, 0, 0);
+		for (auto & frn : remind_filesize_v)
+		{
+			ssm.clear();
+			ssm.str("");
+			ssm << "update file_info set file_size=" << frn.second << " where frn=" << frn.first;
+			sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
+		}
+		sqlite3_exec(db, "commit;", 0, 0, 0);
+		remind_filesize_v.clear();
+
 		if (!m_cj.NotifyMoreData(1000))
-		return;//重新启动
+		{
+			ssm.clear();
+			ssm.str("");
+			ssm << drive_letter << "_" << "file_search.db";
+			sqlite3_close(db);
+			remove(ssm.str().c_str());
+			return;//重新启动
+		}
+		
 	}
 	sqlite3_close(db);
 }
@@ -706,14 +867,16 @@ vector<char> get_drives() {
 int main(int argc, char* argv[])
 {
 	vector<char> driver_letters=get_drives();
-/*
+	/*
 	CChangeJrnl m_cj;
 	char drive_letter = driver_letters.at(1);
-	initial_file_db(m_cj, drive_letter);
-	updating_db(m_cj, drive_letter);
-*/
-
-
+	while (true)
+	{
+		initial_file_db(m_cj, drive_letter);
+		updating_db(m_cj, drive_letter);
+	}
+	*/
+	
 	vector<thread> threads;
 	for (int i = 0; i < driver_letters.size(); i++)
 	{
@@ -729,6 +892,7 @@ int main(int argc, char* argv[])
 		}));
 	}
 	for (auto& th : threads)th.join();
+	
 	return 0;
 }
 
