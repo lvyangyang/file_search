@@ -1,4 +1,4 @@
-// sqlite_test.cpp : ¶¨Òå¿ØÖÆÌ¨Ó¦ÓÃ³ÌĞòµÄÈë¿Úµã¡£
+ï»¿// sqlite_test.cpp : å®šä¹‰æ§åˆ¶å°åº”ç”¨ç¨‹åºçš„å…¥å£ç‚¹ã€‚
 //
 
 #include "stdafx.h"
@@ -166,13 +166,13 @@ BOOL WCharToMByte(LPCWSTR lpcwszStr, std::string &str)
 	str.clear();
 	DWORD dwMinSize = 0;
 	LPSTR lpszStr = NULL;
-	dwMinSize = WideCharToMultiByte(CP_OEMCP, NULL, lpcwszStr, -1, NULL, 0, NULL, FALSE);
+	dwMinSize = WideCharToMultiByte(CP_UTF8, NULL, lpcwszStr, -1, NULL, 0, NULL, FALSE);
 	if (0 == dwMinSize)
 	{
 		return FALSE;
 	}
 	lpszStr = new char[dwMinSize];
-	WideCharToMultiByte(CP_OEMCP, NULL, lpcwszStr, -1, lpszStr, dwMinSize, NULL, FALSE);
+	WideCharToMultiByte(CP_UTF8, NULL, lpcwszStr, -1, lpszStr, dwMinSize, NULL, FALSE);
 	str = lpszStr;
 	delete[] lpszStr;
 	lpszStr = NULL;
@@ -186,7 +186,7 @@ time_t FileTimeToTime_t(FILETIME ft)
 	ULARGE_INTEGER ui;
 	ui.LowPart = ft.dwLowDateTime;
 	ui.HighPart= ft.dwHighDateTime;
-	ll = ft.dwHighDateTime<< 32 + ft.dwLowDateTime;		//ÕâÒ»²½ÊÇ²»ÊÇ¶àÓàµÄ
+	ll = ft.dwHighDateTime<< 32 + ft.dwLowDateTime;		//è¿™ä¸€æ­¥æ˜¯ä¸æ˜¯å¤šä½™çš„
 	return ((LONGLONG)(ui.QuadPart - 116444736000000000) / 10000000);
 }
 
@@ -196,7 +196,7 @@ time_t FileTimeToTime_t(LARGE_INTEGER ft)
 	ULARGE_INTEGER ui;
 	ui.LowPart = ft.LowPart;
 	ui.HighPart = ft.HighPart;
-	ll = ft.HighPart << 32 + ft.LowPart;		//ÕâÒ»²½ÊÇ²»ÊÇ¶àÓàµÄ
+	ll = ft.HighPart << 32 + ft.LowPart;		//è¿™ä¸€æ­¥æ˜¯ä¸æ˜¯å¤šä½™çš„
 	return ((LONGLONG)(ui.QuadPart - 116444736000000000) / 10000000);
 }
 
@@ -367,7 +367,7 @@ void RecursePath(LPCTSTR pszPath, LPCTSTR pszFile,
 			DWORDLONG temp_frn = get_frn_dir(szTempRecursePath, dwVolumeSerialNumber, error);
 			if (!error&&dirinfo_db.find(temp_frn) == dirinfo_db.end())
 			{	
-				//Ìî³äÎÄ¼şĞÅÏ¢
+				//å¡«å……æ–‡ä»¶ä¿¡æ¯
 				dirinfo_db[temp_frn].parent_frn = ParentIndex;
 				dirinfo_db[temp_frn].attrib = fd.dwFileAttributes;
 				dirinfo_db[temp_frn].write_time = FileTimeToTime_t(fd.ftLastWriteTime);
@@ -417,14 +417,14 @@ void recurse_record(file_dir_db &temp_db)
 	if (rc) {
 		fprintf(stderr, "Can't open database: %s\n", sqlite3_errmsg(db));
 	}
-	//´´½¨Êı¾İ±í
+	//åˆ›å»ºæ•°æ®è¡¨
 	sqlite3_exec(db, "PRAGMA synchronous = OFF; ", 0, 0, 0);
 	sqlite3_exec(db, "drop table if exists file_info", 0, 0, 0);
 	sqlite3_exec(db, "create  table file_info (frn integer primary key,parentfrn integer,attrib integer ,write_time integer,file_size integer,name text);", 0, 0, &zErrMsg);
 	sqlite3_exec(db, "drop table if exists dir_info", 0, 0, 0);
 	sqlite3_exec(db, "create  table dir_info (frn integer primary key,parentfrn integer,attrib integer ,write_time integer,name text);", 0, 0, &zErrMsg);
 	sqlite3_exec(db, "create index frn_index on dir_info(frn);", 0, 0, &zErrMsg);
-	//½«ĞÅÏ¢ÊÕ¼¯µ½ÄÚ´æ
+	//å°†ä¿¡æ¯æ”¶é›†åˆ°å†…å­˜
 //	map<DWORDLONG, file_info> fileinfo_db;
 //	map<DWORDLONG, dir_info> dirinfo_db;
 	TCHAR szCurrentPath[MAX_DIR_LENGTH];
@@ -435,7 +435,7 @@ void recurse_record(file_dir_db &temp_db)
 	bool error;
 	RecursePath(szCurrentPath, szCurrentPath, get_frn_dir(szCurrentPath,0,error), volum_serial_number, db,temp_db.fileinfo_db, temp_db.dirinfo_db);
 
-	//²åÈëÎÄ¼şĞÅÏ¢
+	//æ’å…¥æ–‡ä»¶ä¿¡æ¯
 	sqlite3_exec(db, "begin;", 0, 0, 0);
 	sqlite3_stmt *stmt_file;
 	const char* sql_file = "insert into file_info(frn,parentfrn,attrib,write_time,file_size,name) values(?,?,?,?,?,?)";
@@ -461,8 +461,8 @@ void recurse_record(file_dir_db &temp_db)
 	sqlite3_finalize(stmt_file);
 	sqlite3_exec(db, "commit;", 0, 0, 0);
 
-	//temp_db.fileinfo_db.~map();//Çå¿ÕÄÚ´æÖĞµÄÎÄ¼şĞÅÏ¢
-	//²åÈëÄ¿Â¼ĞÅÏ¢
+	//temp_db.fileinfo_db.~map();//æ¸…ç©ºå†…å­˜ä¸­çš„æ–‡ä»¶ä¿¡æ¯
+	//æ’å…¥ç›®å½•ä¿¡æ¯
 	sqlite3_exec(db, "begin;", 0, 0, 0);
 	sqlite3_stmt *stmt_dir;
 	const char* sql_dir = "insert into dir_info(frn,parentfrn,attrib,write_time,name) values(?,?,?,?,?)";
@@ -520,7 +520,7 @@ void populate_dirinfo_mem(file_dir_db &temp_db)
 		}
 	}
 	sqlite3_finalize(stmt);
-	//¹Ø±ÕÊı¾İ¿â 
+	//å…³é—­æ•°æ®åº“ 
 	sqlite3_close(db);
 }
 
@@ -584,7 +584,7 @@ void initial_file_db(CChangeJrnl &m_cj, char drive_letter)
 	if (rc) {
 		fprintf(stderr, "Can't open database: %s\n", sqlite3_errmsg(db));
 	}
-	//´´½¨Êı¾İ±í
+	//åˆ›å»ºæ•°æ®è¡¨
 	bool has_check_point=false;
 	int id;
 	USN current_usn;
@@ -603,7 +603,7 @@ void initial_file_db(CChangeJrnl &m_cj, char drive_letter)
 			}
 		}
 	sqlite3_finalize(stmt);
-	//¹Ø±ÕÊı¾İ¿â 
+	//å…³é—­æ•°æ®åº“ 
 	sqlite3_close(db);
 	if (has_check_point)
 	{
@@ -615,7 +615,7 @@ void initial_file_db(CChangeJrnl &m_cj, char drive_letter)
 		}
 
 	}
-	//journal_id¹ıÆÚ»òµÚÒ»´Î½øÈë³ÌĞò
+	//journal_idè¿‡æœŸæˆ–ç¬¬ä¸€æ¬¡è¿›å…¥ç¨‹åº
 	PUSN_RECORD pRecord;
 	while (true)
 	{
@@ -640,8 +640,8 @@ void initial_file_db(CChangeJrnl &m_cj, char drive_letter)
 	cout << ssm.str().c_str();
 	remove(ssm.str().c_str());
 	recurse_record(temp_db);
-	//¸üĞÂusn_check_point
-	//ÖØĞÂÉ¨Ãè´ÅÅÌÇ°É¾³ıÔ­ÓĞµÄ
+	//æ›´æ–°usn_check_point
+	//é‡æ–°æ‰«æç£ç›˜å‰åˆ é™¤åŸæœ‰çš„
 	rc = sqlite3_open(ssm.str().c_str(), &db);
 	if (rc) {
 		fprintf(stderr, "Can't open database: %s\n", sqlite3_errmsg(db));
@@ -720,7 +720,7 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 	while (true)
 	{
 		
-		//×¼±¸¸üĞÂÊı¾İ¿â
+		//å‡†å¤‡æ›´æ–°æ•°æ®åº“
 		sqlite3_exec(db, "begin;", 0, 0, 0);
 		// Use EnumNext to loop through available records
 		while (pRecord = m_cj.EnumNext()) {
@@ -862,7 +862,7 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 		sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
 		sqlite3_exec(db, "commit;", 0, 0, 0);
 
-		//½«ÎÄ¼ş´óĞ¡ĞÅÏ¢²¹³ä¸üĞÂ
+		//å°†æ–‡ä»¶å¤§å°ä¿¡æ¯è¡¥å……æ›´æ–°
 		for (auto & frn : remind_filesize_v)
 		{
 			if (new_size.get_FileSize(file_size,frn.first))
@@ -882,8 +882,8 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 			sqlite3_reset(file_size_stmt);
 			sqlite3_bind_int64(file_size_stmt, 1, frn.second);
 			sqlite3_bind_int64(file_size_stmt, 2, frn.first);
-			int error=sqlite3_step(file_size_stmt);
-			cout << error << endl;
+			sqlite3_step(file_size_stmt);
+			
 		}
 		sqlite3_exec(db, "commit;", 0, 0, 0);
 		remind_filesize_v.clear();
@@ -896,7 +896,7 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 			sqlite3_close(db);
 			sqlite3_exec(db, "delete from usn_check_point where id=0;", 0, 0, &zErrMsg);
 			cout << ssm.str().c_str() << endl;
-			return;//ÖØĞÂÆô¶¯
+			return;//é‡æ–°å¯åŠ¨
 		}
 		
 	}
@@ -904,20 +904,20 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 }
 
 BOOL is_ntfs(LPWSTR szDrive) {
-	UINT uDriveType;   //Çı¶¯Æ÷ÀàĞÍ
-	DWORD dwVolumeSerialNumber;     //¾íĞòÁĞºÅ
-	DWORD dwMaximumComponentLength;  //×î´ó×é¼ş³¤¶È
-	DWORD dwFileSystemFlags;   //ÎÄ¼şÏµÍ³±êÊ¶
-	TCHAR szFileSystemNameBuffer[1024];  //ÎÄ¼şÏµÍ³Ãû³Æ»º³å
-	TCHAR szDirverName[MAX_PATH]; //Çı¶¯Æ÷Ãû³Æ
-								  //×î´ó×Ö·û³¤¶ÈµÄÂ·¾¶¡£
+	UINT uDriveType;   //é©±åŠ¨å™¨ç±»å‹
+	DWORD dwVolumeSerialNumber;     //å·åºåˆ—å·
+	DWORD dwMaximumComponentLength;  //æœ€å¤§ç»„ä»¶é•¿åº¦
+	DWORD dwFileSystemFlags;   //æ–‡ä»¶ç³»ç»Ÿæ ‡è¯†
+	TCHAR szFileSystemNameBuffer[1024];  //æ–‡ä»¶ç³»ç»Ÿåç§°ç¼“å†²
+	TCHAR szDirverName[MAX_PATH]; //é©±åŠ¨å™¨åç§°
+								  //æœ€å¤§å­—ç¬¦é•¿åº¦çš„è·¯å¾„ã€‚
 	std::string name;
-	uDriveType = GetDriveType(szDrive);  //»ñÈ¡Çı¶¯Æ÷µÄÎïÀíÀàĞÍ  ¸Ãº¯Êı·µ»ØÇı¶¯Æ÷ÀàĞÍ
+	uDriveType = GetDriveType(szDrive);  //è·å–é©±åŠ¨å™¨çš„ç‰©ç†ç±»å‹  è¯¥å‡½æ•°è¿”å›é©±åŠ¨å™¨ç±»å‹
 	if (uDriveType != DRIVE_FIXED&&uDriveType != DRIVE_REMOVABLE)
 		return FALSE;
 
 	if (!GetVolumeInformation(szDrive, szDirverName, MAX_PATH, &dwVolumeSerialNumber, &dwMaximumComponentLength,
-		&dwFileSystemFlags, szFileSystemNameBuffer, 1024)) {    //»ñÈ¡Çı¶¯Æ÷µÄÏà¹ØÊôĞÔ
+		&dwFileSystemFlags, szFileSystemNameBuffer, 1024)) {    //è·å–é©±åŠ¨å™¨çš„ç›¸å…³å±æ€§
 		return FALSE;
 	}
 	WCharToMByte(szFileSystemNameBuffer, name);
@@ -955,14 +955,14 @@ int main(int argc, char* argv[])
 	vector<char> driver_letters=get_drives();
 	
 	/*
-	char drive_letter = driver_letters.at(0);
+	char drive_letter = driver_letters.at(3);
 	while (true)
 	{
 		CChangeJrnl m_cj;
 		initial_file_db(m_cj, drive_letter);
 		updating_db(m_cj, drive_letter);
 	}
-	*/	
+	*/
 	
 	vector<thread> threads;
 	for (int i = 0; i < driver_letters.size(); i++)
