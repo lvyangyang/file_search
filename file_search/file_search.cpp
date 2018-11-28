@@ -13,13 +13,16 @@
 #include<windows.h>
 #include<map>
 #include<vector>
+#include<set>
 #include<list>
 #include<stack>
 #include<thread>
 #include "ChangeJrnl.h"
 
 #define MAX_DIR_LENGTH 4096
+bool brun = false;
 using namespace std;
+string program_location = "C:\\Program Files (x86)\\file_search\\";
 struct file_info
 {
 	string filename;
@@ -201,8 +204,6 @@ time_t FileTimeToTime_t(LARGE_INTEGER ft)
 }
 
 
-
-int file_count = 0;
 
 DWORDLONG get_frn_dir(LPCTSTR pszPath, DWORD volum_serial_number,bool &error)
 {
@@ -393,7 +394,6 @@ void RecursePath(LPCTSTR pszPath, LPCTSTR pszFile,
 				DWORDLONG temp_frn = get_frn_file(pszPath,fd.cFileName, error);
 				if (error)
 					continue;
-				file_count++;
 				fileinfo_db[temp_frn] = temp_fileinfo;
 				fileinfo_db[temp_frn].write_time= FileTimeToTime_t(fd.ftLastWriteTime);
 			}
@@ -411,7 +411,7 @@ void recurse_record(file_dir_db &temp_db)
 	char *zErrMsg = 0;
 	int rc;
 	stringstream ssm;  
-	ssm<< temp_db.drive_letter <<"_"<<"file_search.db";
+	ssm<< program_location <<temp_db.drive_letter <<"_"<<"file_search.db";
 	rc = sqlite3_open(ssm.str().c_str(), &db);
 
 	if (rc) {
@@ -486,8 +486,6 @@ void recurse_record(file_dir_db &temp_db)
 	}
 	sqlite3_finalize(stmt_dir);
 	sqlite3_exec(db, "commit;", 0, 0, 0);
-
-	cout << file_count;
 	sqlite3_close(db);
 }
 //-----------------------------------------------------------------------------------------------------
@@ -497,7 +495,7 @@ void populate_dirinfo_mem(file_dir_db &temp_db)
 	char *zErrMsg = 0;
 	int rc;
 	stringstream ssm;
-	ssm << temp_db.drive_letter << "_" << "file_search.db";
+	ssm << program_location <<temp_db.drive_letter << "_" << "file_search.db";
 	rc = sqlite3_open(ssm.str().c_str(), &db);
 
 	if (rc) {
@@ -578,7 +576,7 @@ void initial_file_db(CChangeJrnl &m_cj, char drive_letter)
 	char *zErrMsg = 0;
 	int rc;
 	stringstream ssm;
-	ssm << drive_letter << "_" << "file_search.db";
+	ssm << program_location << drive_letter << "_" << "file_search.db";
 	rc = sqlite3_open(ssm.str().c_str(), &db);
 
 	if (rc) {
@@ -667,7 +665,7 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 	int rc;
 	stringstream ssm;
 	string filename;
-	ssm << drive_letter << "_" << "file_search.db";
+	ssm << program_location << drive_letter << "_" << "file_search.db";
 	rc = sqlite3_open(ssm.str().c_str(), &db);
 
 	if (rc) {
@@ -698,8 +696,8 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 
 	sqlite3_stmt *file_size_stmt = NULL;
 	const char* sql_file_size = "update file_info set file_size=?1 where frn=?2";
-	if(sqlite3_prepare_v2(db, sql_file_size, strlen(sql_file_size), &file_size_stmt, 0)==SQLITE_OK)
-		cout<<"ok"<<endl;
+	sqlite3_prepare_v2(db, sql_file_size, strlen(sql_file_size), &file_size_stmt, 0);
+	
 
 
 	//dir ----------------
@@ -717,7 +715,7 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 
 
 
-	while (true)
+	while (brun)
 	{
 		
 		//准备更新数据库
@@ -892,7 +890,7 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 		{
 			ssm.clear();
 			ssm.str("");
-			ssm << drive_letter << "_" << "file_search.db";
+			ssm << program_location << drive_letter << "_" << "file_search.db";
 			sqlite3_close(db);
 			sqlite3_exec(db, "delete from usn_check_point where id=0;", 0, 0, &zErrMsg);
 			cout << ssm.str().c_str() << endl;
@@ -927,10 +925,10 @@ BOOL is_ntfs(LPWSTR szDrive) {
 		return FALSE;
 }
 
-vector<char> get_drives() {
+set<char> get_drives() {
 	TCHAR szLogicDriveStrings[1024];
 	TCHAR *szDrive;
-	std::vector<char> driver_letters;
+	std::set<char> driver_letters;
 	std::string driver_string;
 
 	ZeroMemory(szLogicDriveStrings, 1024);
@@ -943,45 +941,136 @@ vector<char> get_drives() {
 		if (is_ntfs(szDrive))
 		{
 			WCharToMByte(szDrive, driver_string);
-			driver_letters.push_back(driver_string.data()[0]);
+			driver_letters.insert(driver_string.data()[0]);
 		}
 		szDrive += (lstrlen(szDrive) + 1);
 	} while (*szDrive != '\x00');
 	return driver_letters;
 }
 
-int main(int argc, char* argv[])
+void init_update_thread(char drive_letter)
 {
-	vector<char> driver_letters=get_drives();
-	
-	/*
-	char drive_letter = driver_letters.at(3);
-	while (true)
+	while (brun)
 	{
 		CChangeJrnl m_cj;
 		initial_file_db(m_cj, drive_letter);
 		updating_db(m_cj, drive_letter);
+		//应对硬盘移除的情况
+		set<char> update_driver_letters = get_drives();
+		if(update_driver_letters.find(drive_letter)==update_driver_letters.end())
+			return;
 	}
-	*/
-	
-	vector<thread> threads;
-	for (int i = 0; i < driver_letters.size(); i++)
-	{
-		threads.push_back(thread([&]() {
-			
-			char drive_letter = driver_letters.at(i);
-			while (true)
-			{	CChangeJrnl m_cj;
-				initial_file_db(m_cj, drive_letter);
-				updating_db(m_cj, drive_letter);
-			}
-			
-		}));
-	}
-	for (auto& th : threads)th.join();
-	
-	return 0;
-	_CrtDumpMemoryLeaks();
 }
+
+
+bool checkOnly()
+{
+	//  创建互斥量  
+	HANDLE m_hMutex = CreateMutex(NULL, FALSE, L"my_file_search_db");
+	//  检查错误代码  
+	if (GetLastError() == ERROR_ALREADY_EXISTS) {
+		//  如果已有互斥量存在则释放句柄并复位互斥量  
+		CloseHandle(m_hMutex);
+		m_hMutex = NULL;
+		//  程序退出  
+		return  false;
+	}
+	else
+		return true;
+}
+
+void WINAPI ServiceMain(int argc, char** argv);
+
+void WINAPI CtrlHandler(DWORD request);
+
+SERVICE_STATUS servicestatus;
+
+SERVICE_STATUS_HANDLE hstatus;
+
+void WINAPI CtrlHandler(DWORD request)
+{
+	switch (request)
+	{
+	case SERVICE_CONTROL_STOP:
+		brun = false;
+		servicestatus.dwCurrentState = SERVICE_STOPPED;
+		break;
+
+	case SERVICE_CONTROL_SHUTDOWN:
+		brun = false;
+		servicestatus.dwCurrentState = SERVICE_STOPPED;
+		break;
+
+	default:
+		break;
+	}
+
+	SetServiceStatus(hstatus, &servicestatus);
+}
+
+void WINAPI ServiceMain(int argc, char** argv)
+{
+	servicestatus.dwServiceType = SERVICE_WIN32;
+	servicestatus.dwCurrentState = SERVICE_START_PENDING;
+	servicestatus.dwControlsAccepted = SERVICE_ACCEPT_SHUTDOWN | SERVICE_ACCEPT_STOP;//在本例中只接受系统关机和停止服务两种控制命令
+	servicestatus.dwWin32ExitCode = 0;
+	servicestatus.dwServiceSpecificExitCode = 0;
+	servicestatus.dwCheckPoint = 0;
+	servicestatus.dwWaitHint = 0;
+
+	hstatus = ::RegisterServiceCtrlHandler(L"file_search_service", CtrlHandler);
+
+	if (hstatus == 0)
+		return;
+	//向SCM 报告运行状态
+
+	servicestatus.dwCurrentState = SERVICE_RUNNING;
+
+	SetServiceStatus(hstatus, &servicestatus);
+
+	//下面就开始任务循环了，你可以添加你自己希望服务做的工作
+
+	brun = true;
+
+
+	if (!checkOnly())
+		return ;
+	//检测插拔情况
+	set<char> old_driver_letters;
+	set<char> driver_letters;
+	vector<thread> threads;
+	while (brun)
+	{
+		driver_letters = get_drives();
+		for (auto &temp_drive_letter : driver_letters)
+		{
+			if (old_driver_letters.find(temp_drive_letter) == old_driver_letters.end())
+				threads.push_back(thread(init_update_thread, temp_drive_letter));
+		}
+
+		old_driver_letters = driver_letters;
+		Sleep(3000);
+	}
+}
+
+
+int _tmain(int argc, _TCHAR* argv[])
+{
+	SERVICE_TABLE_ENTRY entrytable[2];
+
+	entrytable[0].lpServiceName = L"file_search_service";
+
+	entrytable[0].lpServiceProc = (LPSERVICE_MAIN_FUNCTION)ServiceMain;
+
+	entrytable[1].lpServiceName = NULL;
+
+	entrytable[1].lpServiceProc = NULL;
+
+	StartServiceCtrlDispatcher(entrytable);
+
+	return 0;
+}
+
+
 
 
