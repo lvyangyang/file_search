@@ -17,6 +17,7 @@
 #include<list>
 #include<stack>
 #include<thread>
+#include <time.h>
 #include "ChangeJrnl.h"
 
 #define MAX_DIR_LENGTH 4096
@@ -676,6 +677,26 @@ void initial_file_db(CChangeJrnl &m_cj, char drive_letter)
 	sqlite3_close(db);
 }
 //-----------------------------------------------------------------------------------------------------
+enum what_change
+{
+	insert,
+	update,
+	del
+};
+enum dir_or_file
+{
+	dir,
+	file
+};
+struct db_item{
+	dir_or_file dir_file;
+	what_change change;
+	DWORDLONG FileReferenceNumber;
+	DWORDLONG ParentFileReferenceNumber;
+	DWORD FileAttributes;
+	LARGE_INTEGER TimeStamp;
+	string filename;
+};
 void updating_db(CChangeJrnl &m_cj, char drive_letter)
 {
 	TCHAR rootPath[MAX_DIR_LENGTH];
@@ -703,6 +724,8 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 	PUSN_RECORD pRecord;
 	dir_info temp_dir_info;
 	map<DWORDLONG, DWORDLONG> remind_filesize_v;
+	vector<db_item> items_to_change;
+	db_item temp_db_item;
 	
 
 	sqlite3_stmt *file_insert_stmt = NULL;
@@ -735,14 +758,12 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 	sqlite3_stmt *dir_delete_stmt = NULL;
 	const char* sql_dir_delete = "delete from dir_info where frn=?";
 	sqlite3_prepare_v2(db, sql_dir_delete, strlen(sql_dir_delete), &dir_delete_stmt, 0);
-
+	time_t loops_start_time;
 
 
 	while (brun)
 	{
-		
-		//准备更新数据库
-		sqlite3_exec(db, "begin;", 0, 0, 0);
+		time_t loops_start_time = time(NULL);
 		// Use EnumNext to loop through available records
 		while (pRecord = m_cj.EnumNext()) {
 			// Create a zero terminated copy of the filename
@@ -768,7 +789,16 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 				//	ssm << "insert into dir_info(frn,parentfrn,attrib,write_time,name) values(" << pRecord->FileReferenceNumber << ","
 				//		<< pRecord->ParentFileReferenceNumber << "," << pRecord->FileAttributes <<","<< FileTimeToTime_t(pRecord->TimeStamp)<<",'" << filename.data() << "')";
 				//	sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
-
+					temp_db_item.dir_file = dir;
+					temp_db_item.change = insert;
+					temp_db_item.FileReferenceNumber = pRecord->FileReferenceNumber;
+					temp_db_item.ParentFileReferenceNumber = pRecord->ParentFileReferenceNumber;
+					temp_db_item.FileAttributes = pRecord->FileAttributes;
+					temp_db_item.TimeStamp = pRecord->TimeStamp;
+					temp_db_item.filename = filename;
+					
+					items_to_change.push_back(temp_db_item);
+					/*
 					sqlite3_reset(dir_insert_stmt);
 					sqlite3_bind_int64(dir_insert_stmt, 1, pRecord->FileReferenceNumber);
 					sqlite3_bind_int64(dir_insert_stmt, 2, pRecord->ParentFileReferenceNumber);
@@ -777,7 +807,7 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 					sqlite3_bind_text(dir_insert_stmt, 5, filename.data(), -1, SQLITE_STATIC);
 
 					sqlite3_step(dir_insert_stmt);
-
+					*/
 
 					//Sleep(1);
 				}
@@ -792,6 +822,16 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 					//ssm << "update dir_info set name='" << filename.data() << "',"<< "write_time="<< FileTimeToTime_t(pRecord->TimeStamp)<<" where frn=" << pRecord->FileReferenceNumber;
 					//sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
 
+					temp_db_item.dir_file = dir;
+					temp_db_item.change = update;
+					temp_db_item.FileReferenceNumber = pRecord->FileReferenceNumber;
+					temp_db_item.ParentFileReferenceNumber = pRecord->ParentFileReferenceNumber;
+					temp_db_item.FileAttributes = pRecord->FileAttributes;
+					temp_db_item.TimeStamp = pRecord->TimeStamp;
+					temp_db_item.filename = filename;
+
+					items_to_change.push_back(temp_db_item);
+					/*
 					sqlite3_reset(dir_update_stmt);
 					sqlite3_bind_int64(dir_update_stmt, 1, pRecord->ParentFileReferenceNumber);
 					sqlite3_bind_text(dir_update_stmt, 2, filename.data(), -1, SQLITE_STATIC);
@@ -800,6 +840,7 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 										
 					sqlite3_step(dir_update_stmt);
 					Sleep(1);
+					*/
 				}
 
 				// Process deleted directories
@@ -809,12 +850,21 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 					ssm.str("");
 					//ssm << "delete from dir_info where frn=" << pRecord->FileReferenceNumber;
 					//sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
+					temp_db_item.dir_file = dir;
+					temp_db_item.change = del;
+					temp_db_item.FileReferenceNumber = pRecord->FileReferenceNumber;
+					temp_db_item.ParentFileReferenceNumber = pRecord->ParentFileReferenceNumber;
+					temp_db_item.FileAttributes = pRecord->FileAttributes;
+					temp_db_item.TimeStamp = pRecord->TimeStamp;
+					temp_db_item.filename = filename;
 
+					items_to_change.push_back(temp_db_item);
+					/*
 					sqlite3_reset(dir_delete_stmt);
 					sqlite3_bind_int64(dir_delete_stmt, 1, pRecord->FileReferenceNumber);
 
 					sqlite3_step(dir_delete_stmt);
-
+					*/
 				}
 			}
 			else {
@@ -828,7 +878,16 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 					//ssm << "insert  into file_info(frn,parentfrn,attrib,write_time,file_size,name) values(" << pRecord->FileReferenceNumber << ","
 					//	<< pRecord->ParentFileReferenceNumber << "," << pRecord->FileAttributes << "," << FileTimeToTime_t(pRecord->TimeStamp) <<","<<0<< ",'" << filename.data() << "')";
 					//sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
+					temp_db_item.dir_file = file;
+					temp_db_item.change = insert;
+					temp_db_item.FileReferenceNumber = pRecord->FileReferenceNumber;
+					temp_db_item.ParentFileReferenceNumber = pRecord->ParentFileReferenceNumber;
+					temp_db_item.FileAttributes = pRecord->FileAttributes;
+					temp_db_item.TimeStamp = pRecord->TimeStamp;
+					temp_db_item.filename = filename;
 
+					items_to_change.push_back(temp_db_item);
+					/*
 					sqlite3_reset(file_insert_stmt);
 					sqlite3_bind_int64(file_insert_stmt, 1, pRecord->FileReferenceNumber);
 					sqlite3_bind_int64(file_insert_stmt, 2, pRecord->ParentFileReferenceNumber);
@@ -840,6 +899,7 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 					sqlite3_step(file_insert_stmt);
 					//remind_filesize_v.insert(pair<DWORDLONG, DWORDLONG>(pRecord->FileReferenceNumber, 0));
 					Sleep(1);
+					*/
 				}
 
 				// Process renamed file
@@ -851,6 +911,16 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 				//	ssm << "update file_info set name='" << filename.data() << "',"<<" write_time="<< FileTimeToTime_t(pRecord->TimeStamp)<<" where frn=" << pRecord->FileReferenceNumber;
 				//	sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
 
+					temp_db_item.dir_file = file;
+					temp_db_item.change = update;
+					temp_db_item.FileReferenceNumber = pRecord->FileReferenceNumber;
+					temp_db_item.ParentFileReferenceNumber = pRecord->ParentFileReferenceNumber;
+					temp_db_item.FileAttributes = pRecord->FileAttributes;
+					temp_db_item.TimeStamp = pRecord->TimeStamp;
+					temp_db_item.filename = filename;
+
+					items_to_change.push_back(temp_db_item);
+					/*
 					sqlite3_reset(file_update_stmt);
 					sqlite3_bind_int64(file_update_stmt, 1, pRecord->ParentFileReferenceNumber);
 					sqlite3_bind_text(file_update_stmt, 2, filename.data(), -1, SQLITE_STATIC);
@@ -860,6 +930,7 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 					sqlite3_step(file_update_stmt);
 					//remind_filesize_v.insert(pair<DWORDLONG, DWORDLONG>(pRecord->FileReferenceNumber, 0));
 					Sleep(1);
+					*/
 				}
 
 				// Process deleted file
@@ -868,19 +939,104 @@ void updating_db(CChangeJrnl &m_cj, char drive_letter)
 					ssm.str("");
 					//ssm << "delete from file_info where frn=" << pRecord->FileReferenceNumber;
 					//sqlite3_exec(db, ssm.str().c_str(), 0, 0, &zErrMsg);
+					temp_db_item.dir_file = file;
+					temp_db_item.change = del;
+					temp_db_item.FileReferenceNumber = pRecord->FileReferenceNumber;
+					temp_db_item.ParentFileReferenceNumber = pRecord->ParentFileReferenceNumber;
+					temp_db_item.FileAttributes = pRecord->FileAttributes;
+					temp_db_item.TimeStamp = pRecord->TimeStamp;
+					temp_db_item.filename = filename;
 
+					items_to_change.push_back(temp_db_item);
+					/*
 					sqlite3_reset(file_delete_stmt);
 					sqlite3_bind_int64(file_delete_stmt, 1, pRecord->FileReferenceNumber);
 
 					sqlite3_step(file_delete_stmt);
 					Sleep(1);
+					*/
 				}
 
 				if (0 != (pRecord->Reason & USN_REASON_CLOSE)) {
 					remind_filesize_v.insert(pair<DWORDLONG,DWORDLONG>(pRecord->FileReferenceNumber,0));
 				}
 			}
+			if (time(NULL) - loops_start_time >= 2)
+				return;
 		}
+		//准备更新数据库
+		sqlite3_exec(db, "begin;", 0, 0, 0);
+		for (auto &one_db_item : items_to_change)
+		{
+			if (one_db_item.dir_file == dir)
+			{
+				if (one_db_item.change == insert)
+				{
+					sqlite3_reset(dir_insert_stmt);
+					sqlite3_bind_int64(dir_insert_stmt, 1, one_db_item.FileReferenceNumber);
+					sqlite3_bind_int64(dir_insert_stmt, 2, one_db_item.ParentFileReferenceNumber);
+					sqlite3_bind_int64(dir_insert_stmt, 3, one_db_item.FileAttributes);
+					sqlite3_bind_int64(dir_insert_stmt, 4, FileTimeToTime_t(one_db_item.TimeStamp));
+					sqlite3_bind_text(dir_insert_stmt, 5, one_db_item.filename.data(), -1, SQLITE_STATIC);
+
+					sqlite3_step(dir_insert_stmt);
+				}
+				if (one_db_item.change == update)
+				{
+					sqlite3_reset(dir_update_stmt);
+					sqlite3_bind_int64(dir_update_stmt, 1, one_db_item.ParentFileReferenceNumber);
+					sqlite3_bind_text(dir_update_stmt, 2, one_db_item.filename.data(), -1, SQLITE_STATIC);
+					sqlite3_bind_int64(dir_update_stmt, 3, FileTimeToTime_t(one_db_item.TimeStamp));
+					sqlite3_bind_int64(dir_update_stmt, 4, one_db_item.FileReferenceNumber);
+
+					sqlite3_step(dir_update_stmt);
+				}
+				if (one_db_item.change == del)
+				{
+					sqlite3_reset(dir_delete_stmt);
+					sqlite3_bind_int64(dir_delete_stmt, 1, one_db_item.FileReferenceNumber);
+
+					sqlite3_step(dir_delete_stmt);
+				}
+			}
+			if (one_db_item.dir_file == file)
+			{
+				if (one_db_item.change == insert)
+				{
+					sqlite3_reset(file_insert_stmt);
+					sqlite3_bind_int64(file_insert_stmt, 1, one_db_item.FileReferenceNumber);
+					sqlite3_bind_int64(file_insert_stmt, 2, one_db_item.ParentFileReferenceNumber);
+					sqlite3_bind_int64(file_insert_stmt, 3, one_db_item.FileAttributes);
+					sqlite3_bind_int64(file_insert_stmt, 4, FileTimeToTime_t(one_db_item.TimeStamp));
+					sqlite3_bind_int64(file_insert_stmt, 5, 0);
+					sqlite3_bind_text(file_insert_stmt, 6, one_db_item.filename.data(), -1, SQLITE_STATIC);
+
+					sqlite3_step(file_insert_stmt);
+				}
+				if (one_db_item.change == update)
+				{
+					sqlite3_reset(file_update_stmt);
+					sqlite3_bind_int64(file_update_stmt, 1, one_db_item.ParentFileReferenceNumber);
+					sqlite3_bind_text(file_update_stmt, 2, one_db_item.filename.data(), -1, SQLITE_STATIC);
+					sqlite3_bind_int64(file_update_stmt, 3, FileTimeToTime_t(one_db_item.TimeStamp));
+					sqlite3_bind_int64(file_update_stmt, 4, one_db_item.FileReferenceNumber);
+
+					sqlite3_step(file_update_stmt);
+					//remind_filesize_v.insert(pair<DWORDLONG, DWORDLONG>(pRecord->FileReferenceNumber, 0));
+					Sleep(1);
+				}
+				if (one_db_item.change == del)
+				{
+					sqlite3_reset(file_delete_stmt);
+					sqlite3_bind_int64(file_delete_stmt, 1, one_db_item.FileReferenceNumber);
+
+					sqlite3_step(file_delete_stmt);
+					Sleep(1);
+				}
+			}
+
+		}
+		items_to_change.clear();
 		ssm.clear();
 		ssm.str("");
 		ssm << "update usn_check_point set usn=" << m_cj.m_rujd.StartUsn<<",usn_journal_id="<<m_cj.m_rujd.UsnJournalID<< " where id=0";
@@ -1097,6 +1253,7 @@ int _tmain(int argc, _TCHAR* argv[])
 
 	return 0;
 }
+
 /*
 int main()
 {	
@@ -1122,7 +1279,7 @@ int main()
 		Sleep(3000);
 	}
 	
-	//init_update_thread('D');
+	init_update_thread('D');
 	return 0;
 }
 
